@@ -1,0 +1,173 @@
+import {pointInPolygon as inside} from './point-in-polygon/index.js';
+import {deepcopy as deepcopy} from './deepcopy.js';
+
+/**
+ * @Method computes the maximum y coordinate from the identified text blob
+ * @param data
+ * @returns {*}
+ */
+function getYMaxInternal(data) {
+    let v = data.textAnnotations[0].boundingPoly.vertices;
+    let yArray = [];
+    for(let i=0; i <4; i++){
+        yArray.push(v[i]['y']);
+    }
+    return Math.max.apply(null, yArray);
+}
+
+/**
+ * @Method inverts the y axis coordinates for easier computation
+ * as the google vision starts the y axis from the bottom
+ * @param data
+ * @param yMax
+ * @returns {*}
+ */
+function invertAxisInternal(data, yMax) {
+    data = fillMissingValues(data);
+    for(let i=1; i < data.textAnnotations.length; i++ ){
+        let v = data.textAnnotations[i].boundingPoly.vertices;
+        for(let j=0; j <4; j++){
+            v[j]['y'] = (yMax - v[j]['y']);
+        }
+    }
+    return data;
+}
+
+/**
+ * @Method sets zero to missing polygon coordinates. This behaviour has been observed  in images where
+ * the text starts from the edge of the image. In such scenarios the x/y coordinates have been empty.
+ * @param data
+ * @returns {*}
+ */
+function fillMissingValues(data) {
+    for(let i=1; i < data.textAnnotations.length; i++ ){
+        let v = data.textAnnotations[i].boundingPoly.vertices;
+        v.map((ver) => {
+            if(ver['x'] === undefined){
+                ver['x'] = 0;
+            }
+            if(ver['y'] === undefined){
+                ver['y'] = 0;
+            }
+        });
+    }
+    return data;
+}
+
+/**
+ *
+ * @param mergedArray
+ */
+function getBoundingPolygonInternal(mergedArray) {
+
+    for(let i=0; i< mergedArray.length; i++) {
+        let arr = [];
+
+        // calculate line height
+        let h1 = mergedArray[i].boundingPoly.vertices[0].y - mergedArray[i].boundingPoly.vertices[3].y;
+        let h2 = mergedArray[i].boundingPoly.vertices[1].y - mergedArray[i].boundingPoly.vertices[2].y;
+        let h = h1;
+        if(h2> h1) {
+            h = h2
+        }
+        let avgHeight = h * 0.6;
+
+        arr.push(mergedArray[i].boundingPoly.vertices[1]);
+        arr.push(mergedArray[i].boundingPoly.vertices[0]);
+        let line1 = getRectangle(deepcopy(arr), true, avgHeight, true);
+
+        arr = [];
+        arr.push(mergedArray[i].boundingPoly.vertices[2]);
+        arr.push(mergedArray[i].boundingPoly.vertices[3]);
+        let line2 = getRectangle(deepcopy(arr), true, avgHeight, false);
+
+        mergedArray[i]['bigbb'] = createRectCoordinates(line1, line2);
+        mergedArray[i]['lineNum'] = i;
+        mergedArray[i]['match'] = [];
+        mergedArray[i]['matched'] = false;
+    }
+}
+
+
+function combineBoundingPolygonInternal(mergedArray) {
+    // select one word from the array
+    for(let i=0; i< mergedArray.length; i++) {
+
+        let bigBB = mergedArray[i]['bigbb'];
+
+        // iterate through all the array to find the match
+        for(let k=i; k< mergedArray.length; k++) {
+            // Do not compare with the own bounding box and which was not matched with a line
+            if(k !== i && mergedArray[k]['matched'] === false) {
+                let insideCount = 0;
+                for(let j=0; j < 4; j++) {
+                    let coordinate = mergedArray[k].boundingPoly.vertices[j];
+                    if(inside([coordinate.x, coordinate.y], bigBB)){
+                        insideCount += 1;
+                    }
+                }
+                // all four point were inside the big bb
+                if(insideCount === 4) {
+                    let match = {matchCount: insideCount, matchLineNum: k};
+                    mergedArray[i]['match'].push(match);
+                    mergedArray[k]['matched'] = true;
+                }
+
+            }
+        }
+    }
+}
+
+function getRectangle(v, isRoundValues, avgHeight, isAdd) {
+    if(isAdd){
+        v[1].y = v[1].y + avgHeight;
+        v[0].y = v[0].y + avgHeight;
+    }else {
+        v[1].y = v[1].y - avgHeight;
+        v[0].y = v[0].y - avgHeight;
+    }
+
+    let yDiff = (v[1].y - v[0].y);
+    let xDiff = (v[1].x - v[0].x);
+
+    let gradient = yDiff / xDiff;
+
+    let xThreshMin = 1;
+    let xThreshMax = 2000;
+
+    let yMin;
+    let yMax;
+    if(gradient === 0) {
+        // extend the line
+        yMin = v[0].y;
+        yMax = v[0].y;
+    }else{
+        yMin = (v[0].y) - (gradient * (v[0].x - xThreshMin));
+        yMax = (v[0].y) + (gradient * (xThreshMax - v[0].x));
+    }
+    if(isRoundValues) {
+        yMin = Math.round(yMin);
+        yMax = Math.round(yMax);
+    }
+    return {xMin : xThreshMin, xMax : xThreshMax, yMin: yMin, yMax: yMax};
+}
+
+function createRectCoordinates(line1, line2) {
+    return [[line1.xMin, line1.yMin], [line1.xMax, line1.yMax], [line2.xMax, line2.yMax],[line2.xMin, line2.yMin]];
+}
+
+export const getYMax = function (data) {
+    return getYMaxInternal(data);
+};
+
+export const invertAxis = function (data, yMax) {
+    return invertAxisInternal(data, yMax);
+};
+
+export const getBoundingPolygon = function (mergedArray) {
+    return getBoundingPolygonInternal(mergedArray);
+};
+
+export const combineBoundingPolygon = function (mergedArray) {
+    return combineBoundingPolygonInternal(mergedArray);
+};
